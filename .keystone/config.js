@@ -1,7 +1,9 @@
 "use strict";
+var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __export = (target, all) => {
   for (var name in all)
@@ -15,6 +17,10 @@ var __copyProps = (to, from, except, desc) => {
   }
   return to;
 };
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
 // keystone.ts
@@ -24,7 +30,6 @@ __export(keystone_exports, {
 });
 module.exports = __toCommonJS(keystone_exports);
 var import_core2 = require("@keystone-6/core");
-var import_session = require("@keystone-6/core/session");
 var import_auth = require("@keystone-6/auth");
 
 // schema.ts
@@ -36,11 +41,14 @@ var lists = {
     access: {
       operation: {
         ...(0, import_access.allOperations)(import_access.allowAll),
-        delete: ({ session }) => session?.data.isAdmin
+        delete: ({ session: session2, context, listKey, operation }) => {
+          console.log({ session: session2 });
+          return session2?.data.isAdmin;
+        }
       }
     },
     ui: {
-      hideDelete: ({ session }) => !session?.data.isAdmin,
+      hideDelete: ({ session: session2 }) => !session2?.data.isAdmin,
       listView: {
         initialColumns: ["name", "email", "isAdmin"]
       }
@@ -50,28 +58,28 @@ var lists = {
       email: (0, import_fields.text)({ isIndexed: "unique", validation: { isRequired: true } }),
       password: (0, import_fields.password)({
         access: {
-          update: ({ session, item }) => session && (session.data.isAdmin || session.itemId === item.id)
+          update: ({ session: session2, item }) => session2 && (session2.data.isAdmin || session2.itemId === item.id)
         },
         ui: {
           itemView: {
-            fieldMode: ({ session, item }) => session && (session.data.isAdmin || session.itemId === item.id) ? "edit" : "hidden"
+            fieldMode: ({ session: session2, item }) => session2 && (session2.data.isAdmin || session2.itemId === item.id) ? "edit" : "hidden"
           },
           listView: {
-            fieldMode: ({ session }) => session?.item?.isAdmin ? "read" : "hidden"
+            fieldMode: ({ session: session2 }) => session2?.item?.isAdmin ? "read" : "hidden"
           }
         }
       }),
       isAdmin: (0, import_fields.checkbox)({
         access: {
-          create: ({ session }) => session?.data.isAdmin,
-          update: ({ session }) => session?.data.isAdmin
+          create: ({ session: session2 }) => session2?.data.isAdmin,
+          update: ({ session: session2 }) => session2?.data.isAdmin
         },
         ui: {
           createView: {
-            fieldMode: ({ session }) => session?.data.isAdmin ? "edit" : "hidden"
+            fieldMode: ({ session: session2 }) => session2?.data.isAdmin ? "edit" : "hidden"
           },
           itemView: {
-            fieldMode: ({ session }) => session?.data.isAdmin ? "edit" : "read"
+            fieldMode: ({ session: session2 }) => session2?.data.isAdmin ? "edit" : "read"
           }
         }
       })
@@ -79,9 +87,58 @@ var lists = {
   })
 };
 
+// session/custom-session.ts
+var import_jsonwebtoken = __toESM(require("jsonwebtoken"));
+var import_crypto = require("crypto");
+var MAX_AGE = 60 * 60 * 8;
+var ALGORITHM = "HS256";
+var SECRET = (0, import_crypto.randomBytes)(32).toString("base64").replace(/[^a-zA-Z0-9]/g, "").slice(0, 32);
+function customizeStatelessSessions({
+  secret,
+  maxAge = MAX_AGE,
+  secure = false
+}) {
+  if (!secret) {
+    throw new Error("You must specify a session secret to use sessions");
+  }
+  return {
+    async get(args) {
+      const { req } = args;
+      const token = req.headers.authorization?.replace("Bearer ", "");
+      if (!token)
+        return;
+      try {
+        const data = import_jsonwebtoken.default.verify(token, secret, { maxAge });
+        return data;
+      } catch (error) {
+        return;
+      }
+    },
+    async end(args) {
+      const { res } = args;
+      res.setHeader("Authorization", "");
+    },
+    async start(args) {
+      const { data, res } = args;
+      try {
+        const newToken = import_jsonwebtoken.default.sign({ ...Object(data) }, secret, {
+          algorithm: ALGORITHM,
+          expiresIn: maxAge
+        });
+        res.setHeader("Authorization", "Bearer " + newToken);
+        return newToken;
+      } catch (error) {
+        return "";
+      }
+    }
+  };
+}
+var session = customizeStatelessSessions({
+  maxAge: MAX_AGE,
+  secret: SECRET
+});
+
 // keystone.ts
-var sessionSecret = "-- DEV COOKIE SECRET; CHANGE ME --";
-var sessionMaxAge = 60 * 60 * 24 * 30;
 var { withAuth } = (0, import_auth.createAuth)({
   listKey: "User",
   identityField: "email",
@@ -96,15 +153,18 @@ var { withAuth } = (0, import_auth.createAuth)({
 });
 var keystone_default = withAuth(
   (0, import_core2.config)({
+    server: {
+      cors: {
+        origin: "*",
+        credentials: true
+      }
+    },
     db: {
       provider: "sqlite",
       url: process.env.DATABASE_URL || "file:./keystone-example.db"
     },
     lists,
     ui: {},
-    session: (0, import_session.statelessSessions)({
-      maxAge: sessionMaxAge,
-      secret: sessionSecret
-    })
+    session
   })
 );
